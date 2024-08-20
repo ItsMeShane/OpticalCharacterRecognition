@@ -141,31 +141,37 @@
          ctx.fillStyle = 'white';
          ctx.fillRect(0, 0, canvas.width, canvas.height);
          const clearButton = document.getElementById('clearButton');
-         let drawing = false;
-         canvas.addEventListener('mousedown', () => (drawing = true));
-         canvas.addEventListener('mouseup', () => (drawing = false));
-         canvas.addEventListener('mousemove', draw);
-         canvas.addEventListener('mouseleave', () => (drawing = false));
 
+         let drawing = false;
+         function startDrawing(event) {
+            event.preventDefault(); // Prevent default behavior on touch devices
+            drawing = true;
+         }
+         function stopDrawing() {
+            drawing = false;
+            ctx.beginPath();
+         }
          function draw(event) {
-            if (!drawing) {
-               ctx.beginPath();
-               return;
-            }
+            event.preventDefault(); // Prevent default behavior on touch devices
+            if (!drawing) return;
+            const { clientX, clientY } = event.type.startsWith('touch')
+               ? event.touches[0]
+               : event;
             ctx.lineWidth = 25;
             ctx.lineCap = 'round';
             ctx.strokeStyle = 'black';
-            ctx.lineTo(
-               event.clientX - canvas.offsetLeft,
-               event.clientY - canvas.offsetTop
-            );
+            ctx.lineTo(clientX - canvas.offsetLeft, clientY - canvas.offsetTop);
             ctx.stroke();
             ctx.beginPath();
-            ctx.moveTo(
-               event.clientX - canvas.offsetLeft,
-               event.clientY - canvas.offsetTop
-            );
+            ctx.moveTo(clientX - canvas.offsetLeft, clientY - canvas.offsetTop);
          }
+         canvas.addEventListener('mousedown', startDrawing);
+         canvas.addEventListener('mouseup', stopDrawing);
+         canvas.addEventListener('mousemove', draw);
+         canvas.addEventListener('mouseleave', stopDrawing);
+         canvas.addEventListener('touchstart', startDrawing);
+         canvas.addEventListener('touchend', stopDrawing);
+         canvas.addEventListener('touchmove', draw);
 
          clearButton.addEventListener('click', () => {
             ctx.fillStyle = 'white';
