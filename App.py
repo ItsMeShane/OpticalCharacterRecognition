@@ -19,12 +19,6 @@ def load_and_preprocess_image(img):
 def predict():
     img_data = request.json['image'].split(',')[1]  # Extract base64 data
     img = Image.open(io.BytesIO(base64.b64decode(img_data))).convert('L')  # Decode and convert to grayscale
-    img = img.resize((28, 28))
-
-    # Convert resized image to base64
-    buffered = io.BytesIO()
-    img.save(buffered, format="PNG")
-    img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
     # Preprocess image and make prediction
     img_array = load_and_preprocess_image(img)
@@ -32,7 +26,6 @@ def predict():
 
     return jsonify({
         'probabilities': prediction_probabilities.tolist(),  # Send all probabilities
-        'imgSrc': f"data:image/png;base64,{img_base64}"
     })
 
 

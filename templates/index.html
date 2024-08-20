@@ -112,6 +112,8 @@
          canvas.addEventListener('mousedown', () => (drawing = true));
          canvas.addEventListener('mouseup', () => (drawing = false));
          canvas.addEventListener('mousemove', draw);
+         canvas.addEventListener('mouseleave', () => (drawing = false));
+
          function draw(event) {
             if (!drawing) {
                ctx.beginPath();
@@ -140,13 +142,13 @@
          });
 
          function updatePrediction() {
-            const dataURL = canvas.toDataURL('image/png'); // convert canvas content to base64 string
+            const scaledDataURL = resizeImage(canvas, 28, 28); // Resize to 28x28
             fetch('/predict', {
                method: 'POST',
                headers: {
                   'Content-Type': 'application/json',
                },
-               body: JSON.stringify({ image: dataURL }),
+               body: JSON.stringify({ image: scaledDataURL }),
             })
                .then((response) => response.json())
                .then((data) => {
@@ -166,15 +168,24 @@
                         const percentage = (prob * 100).toFixed(0);
                         return `
                         <div class="bar">
-                           <span>${i}:</span>
-                           <div style="width: ${percentage}%"></div>
+                            <span>${i}:</span>
+                            <div style="width: ${percentage}%"></div>
                         </div>`;
                      })
                      .join('');
 
-                  whatComputerSees.src = data.imgSrc;
+                  whatComputerSees.src = scaledDataURL;
                })
                .catch((error) => console.error('Error:', error));
+         }
+
+         function resizeImage(canvas, width, height) {
+            const smallCanvas = document.createElement('canvas');
+            smallCanvas.width = width;
+            smallCanvas.height = height;
+            const smallCtx = smallCanvas.getContext('2d');
+            smallCtx.drawImage(canvas, 0, 0, width, height);
+            return smallCanvas.toDataURL('image/png');
          }
       </script>
    </body>
