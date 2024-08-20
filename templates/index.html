@@ -80,6 +80,22 @@
             background-color: #4caf50;
             transition: width 0.3s;
          }
+         #infoSection {
+            margin-top: 20px;
+            padding: 10px;
+            text-align: center;
+            font-size: 14px;
+            color: #333;
+         }
+
+         #infoSection a {
+            color: #007bff;
+            text-decoration: none;
+         }
+
+         #infoSection a:hover {
+            text-decoration: underline;
+         }
       </style>
    </head>
    <body>
@@ -100,6 +116,23 @@
             <div id="probabilityChart"></div>
          </div>
       </div>
+      <div id="infoSection">
+         <p>Author: Shane Koester</p>
+         <p>
+            <a
+               href="https://github.com/ItsMeShane/OpticalCharacterRecognition"
+               target="_blank"
+               >GitHub</a
+            >
+            |
+            <a href="https://shanes.tech" target="_blank">Website</a>
+         </p>
+         <p>
+            <strong>Tip:</strong> For best results, draw the digits in the center of the
+            canvas
+         </p>
+      </div>
+
       <script>
          const canvas = document.getElementById('drawingPanel');
          const prediction = document.getElementById('predictionPanel');
@@ -188,7 +221,7 @@
             smallCtx.drawImage(canvas, 0, 0, width, height);
             return smallCanvas.toDataURL('image/png');
          }
-         // update prediction every 400 milliseconds 
+         // update prediction every 400 milliseconds
          setInterval(() => {
             updatePrediction();
          }, 400);
