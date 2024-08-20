@@ -132,7 +132,6 @@
                event.clientX - canvas.offsetLeft,
                event.clientY - canvas.offsetTop
             );
-            updatePrediction();
          }
 
          clearButton.addEventListener('click', () => {
@@ -161,18 +160,20 @@
                         ? 'Predicted digit: unknown'
                         : `Predicted digit: ${predictedDigit}`;
 
-                  // generate bar chart for probabilities
+                  // update or create bar chart
                   const chartContainer = document.getElementById('probabilityChart');
-                  chartContainer.innerHTML = data.probabilities
-                     .map((prob, i) => {
-                        const percentage = (prob * 100).toFixed(0);
-                        return `
-                        <div class="bar">
-                            <span>${i}:</span>
-                            <div style="width: ${percentage}%"></div>
-                        </div>`;
-                     })
-                     .join('');
+                  data.probabilities.forEach((prob, i) => {
+                     let bar = document.getElementById(`bar-${i}`);
+                     if (!bar) {
+                        bar = document.createElement('div');
+                        bar.className = 'bar';
+                        bar.id = `bar-${i}`;
+                        bar.innerHTML = `<span>${i}:</span><div style="width: 0%"></div>`;
+                        chartContainer.appendChild(bar);
+                     }
+                     const percentage = (prob * 100).toFixed(0);
+                     bar.querySelector('div').style.width = `${percentage}%`;
+                  });
 
                   whatComputerSees.src = scaledDataURL;
                })
@@ -187,6 +188,10 @@
             smallCtx.drawImage(canvas, 0, 0, width, height);
             return smallCanvas.toDataURL('image/png');
          }
+         // update prediction every 400 milliseconds 
+         setInterval(() => {
+            updatePrediction();
+         }, 400);
       </script>
    </body>
 </html>
