@@ -28,10 +28,10 @@ def predict():
 
     # Preprocess image and make prediction
     img_array = load_and_preprocess_image(img)
-    prediction = model.predict(img_array.reshape(1, -1))
+    prediction_probabilities  = model.predict(img_array.reshape(1, -1))
 
     return jsonify({
-        'prediction': int(prediction),
+        'probabilities': prediction_probabilities.tolist(),  # Send all probabilities
         'imgSrc': f"data:image/png;base64,{img_base64}"
     })
 

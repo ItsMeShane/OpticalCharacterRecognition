@@ -3,7 +3,7 @@
    <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Optical Character Recognition</title>
+      <title>OCR Neural Network</title>
       <style>
          body {
             font-family: Arial, sans-serif;
@@ -34,14 +34,10 @@
          #drawingPanel {
             border: 2px solid #000;
          }
-         #predictionPanel {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 300px;
-            height: 300px;
-            font-size: 24px;
+         #clearButton {
+            margin-top: 10px;
          }
+
          #whatComputerSees {
             width: 100%;
             height: 100%;
@@ -50,8 +46,39 @@
             width: 300px;
             height: 300px;
          }
-         #clearButton {
+
+         #predictionPanel {
+            display: flex;
+            text-align: left;
+            justify-content: left;
+            width: 300px;
+            font-size: 24px;
+            line-height: 1;
+         }
+         #probabilityChart {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            width: 300px;
             margin-top: 10px;
+         }
+         .bar {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px;
+            width: 100%;
+         }
+         .bar span {
+            width: 30px;
+            text-align: right;
+            margin-right: 8px;
+         }
+         .bar div {
+            height: 20px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background-color: #4caf50;
+            transition: width 0.3s;
          }
       </style>
    </head>
@@ -64,12 +91,13 @@
             <button id="clearButton">Clear</button>
          </div>
          <div class="panel" id="whatComputerSeesPanelContainer">
-            <h2>What the Computer Sees:</h2>
+            <h2>What the NN Sees:</h2>
             <img id="whatComputerSees" />
          </div>
          <div class="panel" id="predictionPanelContainer">
             <h2>Prediction:</h2>
-            <div id="predictionPanel"></div>
+            <div id="predictionPanel">Predicted digit: unknown</div>
+            <div id="probabilityChart"></div>
          </div>
       </div>
       <script>
@@ -89,7 +117,7 @@
                ctx.beginPath();
                return;
             }
-            ctx.lineWidth = 20;
+            ctx.lineWidth = 25;
             ctx.lineCap = 'round';
             ctx.strokeStyle = 'black';
             ctx.lineTo(
@@ -109,11 +137,10 @@
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             updatePrediction();
-            prediction.textContent = '';
          });
 
          function updatePrediction() {
-            const dataURL = canvas.toDataURL('image/png'); // Convert canvas content to base64 string
+            const dataURL = canvas.toDataURL('image/png'); // convert canvas content to base64 string
             fetch('/predict', {
                method: 'POST',
                headers: {
@@ -123,7 +150,28 @@
             })
                .then((response) => response.json())
                .then((data) => {
-                  prediction.textContent = `Predicted digit: ${data.prediction}`;
+                  const predictedDigit = data.probabilities.indexOf(
+                     Math.max(...data.probabilities)
+                  );
+                  // if the certainty is under 50% then digit is 'unknown'
+                  prediction.innerHTML =
+                     data.probabilities[predictedDigit] < 0.5
+                        ? 'Predicted digit: unknown'
+                        : `Predicted digit: ${predictedDigit}`;
+
+                  // generate bar chart for probabilities
+                  const chartContainer = document.getElementById('probabilityChart');
+                  chartContainer.innerHTML = data.probabilities
+                     .map((prob, i) => {
+                        const percentage = (prob * 100).toFixed(0);
+                        return `
+                        <div class="bar">
+                           <span>${i}:</span>
+                           <div style="width: ${percentage}%"></div>
+                        </div>`;
+                     })
+                     .join('');
+
                   whatComputerSees.src = data.imgSrc;
                })
                .catch((error) => console.error('Error:', error));

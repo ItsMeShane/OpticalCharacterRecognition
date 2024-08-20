@@ -49,9 +49,6 @@ class NN:
 
     def predict(self, image):
         image_vector = image.flatten().reshape((784, 1))
-        prediction_probs = self.__forward(image_vector)
-        prediction = np.argmax(prediction_probs)
-        # certainty = prediction_probs[prediction]  
-        # print(f"Prediction: {prediction}, Certainty: {certainty:.4f}") 
-        return prediction
+        prediction_probabilities = self.__forward(image_vector)
+        return prediction_probabilities
 
