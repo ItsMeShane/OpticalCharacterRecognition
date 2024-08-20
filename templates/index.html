@@ -141,29 +141,36 @@
          ctx.fillStyle = 'white';
          ctx.fillRect(0, 0, canvas.width, canvas.height);
          const clearButton = document.getElementById('clearButton');
-
          let drawing = false;
          function startDrawing(event) {
-            event.preventDefault(); // Prevent default behavior on touch devices
+            event.preventDefault();
             drawing = true;
          }
          function stopDrawing() {
             drawing = false;
             ctx.beginPath();
          }
-         function draw(event) {
-            event.preventDefault(); // Prevent default behavior on touch devices
-            if (!drawing) return;
+         function getCoordinates(event) {
             const { clientX, clientY } = event.type.startsWith('touch')
                ? event.touches[0]
                : event;
+            const rect = canvas.getBoundingClientRect();
+            return {
+               x: clientX - rect.left,
+               y: clientY - rect.top,
+            };
+         }
+         function draw(event) {
+            event.preventDefault();
+            if (!drawing) return;
+            const { x, y } = getCoordinates(event);
             ctx.lineWidth = 25;
             ctx.lineCap = 'round';
             ctx.strokeStyle = 'black';
-            ctx.lineTo(clientX - canvas.offsetLeft, clientY - canvas.offsetTop);
+            ctx.lineTo(x, y);
             ctx.stroke();
             ctx.beginPath();
-            ctx.moveTo(clientX - canvas.offsetLeft, clientY - canvas.offsetTop);
+            ctx.moveTo(x, y);
          }
          canvas.addEventListener('mousedown', startDrawing);
          canvas.addEventListener('mouseup', stopDrawing);
