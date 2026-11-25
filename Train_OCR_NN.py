@@ -1,149 +1,139 @@
 import numpy as np
 import h5py
-import copy
 import pickle
+from scipy import ndimage
 
-# Load MNIST data
-MNIST_data = h5py.File('MNIST_data.hdf5', 'r')
-x_train = np.float32(MNIST_data['x_train'][:])
-y_train = np.int32(np.array(MNIST_data['y_train'][:, 0]))
-x_test = np.float32(MNIST_data['x_test'][:])
-y_test = np.int32(np.array(MNIST_data['y_test'][:, 0]))
-MNIST_data.close()
+
+def load_mnist(file_name='MNIST_data.hdf5'):
+    with h5py.File(file_name, 'r') as f:
+        x_train = np.float32(f['x_train'][:])
+        y_train = np.int64(f['y_train'][:, 0])
+        x_test = np.float32(f['x_test'][:])
+        y_test = np.int64(f['y_test'][:, 0])
+    return x_train, y_train, x_test, y_test
+
+
+# Data augmentation: every time an image is used it gets a new random distortion,
+# so the network learns what digits look like when rotated, slanted, resized,
+# or shifted, instead of memorizing the exact training images
+
+def augment(X, rng):
+    """Randomly distort a batch of flattened 28x28 images, X of shape (batch, 784)."""
+    B = len(X)
+    angle = np.deg2rad(rng.uniform(-15, 15, B))  # rotation
+    slant = rng.uniform(-0.3, 0.3, B)            # italic-style shear
+    scale = rng.uniform(0.85, 1.15, B)           # size
+    shift = rng.uniform(-2, 2, (B, 2))           # position, in pixels
+
+    # For every output pixel, work out which point of the input image to sample
+    cos, sin = np.cos(angle), np.sin(angle)
+    rotate = np.stack([np.stack([cos, -sin], -1), np.stack([sin, cos], -1)], -2)
+    shear = np.tile(np.eye(2), (B, 1, 1))
+    shear[:, 1, 0] = slant
+    M = rotate @ shear / scale[:, None, None]
+    grid = np.indices((28, 28)).reshape(2, -1) - 14.0  # pixel coordinates relative to the center
+    src = M @ (grid[None] - shift[:, :, None]) + 14.0   # (batch, 2, 784)
+
+    batch_index = np.broadcast_to(np.arange(B)[:, None], (B, 784))
+    out = ndimage.map_coordinates(X.reshape(B, 28, 28), [batch_index, src[:, 0], src[:, 1]], order=1)
+    out = out.reshape(B, 28, 28)
+
+    # Thicker strokes for some images (small drawings end up with thick lines)
+    thick = rng.random(B) < 0.3
+    if thick.any():
+        out[thick] = ndimage.grey_dilation(out[thick], size=(1, 2, 2))
+    return out.reshape(B, 784)
+
 
 ####################################################################################
-# Implementation of stochastic gradient descent algorithm
+# Two-layer network trained with mini-batch stochastic gradient descent
 
 class NN:
-    first_layer = {}
-    second_layer = {}
-
-    def __init__(self, inputs, hidden, outputs):
-        # Initialize the model parameters, including the first and second layer parameters and biases
-        self.first_layer['para'] = np.random.randn(hidden, inputs) / np.sqrt(inputs)
-        self.first_layer['bias'] = np.random.randn(hidden, 1) / np.sqrt(hidden)
-        self.second_layer['para'] = np.random.randn(outputs, hidden) / np.sqrt(hidden)
-        self.second_layer['bias'] = np.random.randn(outputs, 1) / np.sqrt(hidden)
+    def __init__(self, inputs, hidden, outputs, seed=None):
+        self.rng = np.random.default_rng(seed)
+        # He initialization (scaled for ReLU), biases start at zero
+        self.first_layer = {
+            'para': self.rng.standard_normal((hidden, inputs), dtype=np.float32) * np.float32(np.sqrt(2 / inputs)),
+            'bias': np.zeros((hidden, 1), np.float32),
+        }
+        self.second_layer = {
+            'para': self.rng.standard_normal((outputs, hidden), dtype=np.float32) * np.float32(np.sqrt(1 / hidden)),
+            'bias': np.zeros((outputs, 1), np.float32),
+        }
         self.input_size = inputs
         self.hid_size = hidden
         self.output_size = outputs
 
-    def __activationfunc(self, Z, type='ReLU', deri=False):
-        if type == 'ReLU':
-            if deri:
-                return np.array([1 if i > 0 else 0 for i in np.squeeze(Z)])
-            else:
-                return np.array([i if i > 0 else 0 for i in np.squeeze(Z)])
-        elif type == 'Sigmoid':
-            if deri:
-                return 1 / (1 + np.exp(-Z)) * (1 - 1 / (1 + np.exp(-Z)))
-            else:
-                return 1 / (1 + np.exp(-Z))
-        elif type == 'tanh':
-            if deri:
-                return 1 - (np.tanh(Z))**2
-            else:
-                return np.tanh(Z)
-        else:
-            raise TypeError('Invalid type!')
+    def __forward(self, X):
+        # Processes a whole batch at once: X has shape (batch, inputs)
+        Z = X @ self.first_layer['para'].T + self.first_layer['bias'].T
+        H = np.maximum(Z, 0)  # ReLU
+        U = H @ self.second_layer['para'].T + self.second_layer['bias'].T
+        P = np.exp(U - U.max(axis=1, keepdims=True))  # softmax, shifted so exp() can't overflow
+        P /= P.sum(axis=1, keepdims=True)
+        return Z, H, P
 
-    def __Softmax(self, z):
-        return 1 / sum(np.exp(z)) * np.exp(z)
-
-    def __cross_entropy_error(self, v, y):
-        return -np.log(v[y])
-
-    def __forward(self, x, y):
-        # Implement the forward computation, calculation of prediction list and error
-        Z = np.matmul(self.first_layer['para'], x).reshape((self.hid_size, 1)) + self.first_layer['bias']
-        H = np.array(self.__activationfunc(Z)).reshape((self.hid_size, 1))
-        U = np.matmul(self.second_layer['para'], H).reshape((self.output_size, 1)) + self.second_layer['bias']
-        predict_list = np.squeeze(self.__Softmax(U))
-        error = self.__cross_entropy_error(predict_list, y)
-        
-        dic = {
-            'Z': Z,
-            'H': H,
-            'U': U,
-            'f_X': predict_list.reshape((1, self.output_size)),
-            'error': error
+    def __back_propagation(self, X, y, Z, H, P):
+        # Gradients of the cross-entropy loss, averaged over the batch
+        dU = P.copy()
+        dU[np.arange(len(y)), y] -= 1
+        dU /= len(y)
+        dZ = (dU @ self.second_layer['para']) * (Z > 0)
+        return {
+            'dC': dU.T @ H,
+            'db_2': dU.sum(axis=0)[:, None],
+            'dW': dZ.T @ X,
+            'db_1': dZ.sum(axis=0)[:, None],
         }
-        return dic
 
-    def __back_propagation(self, x, y, f_result):
-        # Implement the backpropagation process, compute the gradients
-        E = np.array([0] * self.output_size).reshape((1, self.output_size))
-        E[0][y] = 1
-        dU = (-(E - f_result['f_X'])).reshape((self.output_size, 1))
-        db_2 = copy.copy(dU)
-        dC = np.matmul(dU, f_result['H'].transpose())
-        delta = np.matmul(self.second_layer['para'].transpose(), dU)
-        db_1 = delta.reshape(self.hid_size, 1) * self.__activationfunc(f_result['Z'], deri=True).reshape(self.hid_size, 1)
-        dW = np.matmul(db_1.reshape((self.hid_size, 1)), x.reshape((1, self.input_size)))
+    def __optimize(self, grad, learning_rate, momentum, weight_decay):
+        # SGD with momentum. Weight decay pulls the weights toward zero, which
+        # discourages overfitting.
+        updates = [
+            (self.first_layer, 'para', grad['dW'] + weight_decay * self.first_layer['para']),
+            (self.first_layer, 'bias', grad['db_1']),
+            (self.second_layer, 'para', grad['dC'] + weight_decay * self.second_layer['para']),
+            (self.second_layer, 'bias', grad['db_2']),
+        ]
+        for i, (layer, key, g) in enumerate(updates):
+            self.velocity[i] = momentum * self.velocity[i] - learning_rate * g
+            layer[key] += self.velocity[i]
 
-        grad = {
-            'dC': dC,
-            'db_2': db_2,
-            'db_1': db_1,
-            'dW': dW
-        }
-        return grad
+    def train(self, X_train, Y_train, X_test, Y_test, epochs=30, batch_size=64,
+              learning_rate=0.05, momentum=0.9, weight_decay=1e-4, augmentation=True):
+        n = len(X_train)
+        total_steps = epochs * int(np.ceil(n / batch_size))
+        self.velocity = [np.zeros_like(p) for p in (
+            self.first_layer['para'], self.first_layer['bias'],
+            self.second_layer['para'], self.second_layer['bias'])]
 
-    def __optimize(self, b_result, learning_rate):
-        # Update the hyperparameters
-        self.second_layer['para'] -= learning_rate * b_result['dC']
-        self.second_layer['bias'] -= learning_rate * b_result['db_2']
-        self.first_layer['bias'] -= learning_rate * b_result['db_1']
-        self.first_layer['para'] -= learning_rate * b_result['dW']
-
-    def __loss(self, X_train, Y_train):
-        # Implement the loss function of the training set
-        loss = 0
-        for n in range(len(X_train)):
-            y = Y_train[n]
-            x = X_train[n][:]
-            loss += self.__forward(x, y)['error']
-        return loss
-
-    def train(self, X_train, Y_train, num_iterations=1000, learning_rate=0.5):
-        # Generate a random list of indices for the training set
-        rand_indices = np.random.choice(len(X_train), num_iterations, replace=True)
-        
-        def l_rate(base_rate, ite, num_iterations, schedule=False):
-            # Determine whether to use the learning schedule
-            if schedule:
-                return base_rate * 10 ** (-np.floor(ite / num_iterations * 5))
-            else:
-                return base_rate
-
-        count = 1
-        for i in rand_indices:
-            f_result = self.__forward(X_train[i], Y_train[i])
-            b_result = self.__back_propagation(X_train[i], Y_train[i], f_result)
-            self.__optimize(b_result, l_rate(learning_rate, i, num_iterations, True))
-            
-            if count % 1000 == 0:
-                if count % 5000 == 0:
-                    loss = self.__loss(X_train, Y_train)
-                    test = self.testing(x_test, y_test)
-                    print(f'Trained for {count} times, loss = {loss}, test = {test}')
-                else:
-                    print(f'Trained for {count} times')
-            count += 1
+        step = 0
+        for epoch in range(1, epochs + 1):
+            order = self.rng.permutation(n)  # visit every image once per epoch, in a new order
+            epoch_loss = 0.0
+            for start in range(0, n, batch_size):
+                idx = order[start:start + batch_size]
+                X, y = X_train[idx], Y_train[idx]
+                if augmentation:
+                    X = augment(X, self.rng)
+                Z, H, P = self.__forward(X)
+                epoch_loss += -np.log(P[np.arange(len(y)), y] + 1e-12).sum()
+                grad = self.__back_propagation(X, y, Z, H, P)
+                # Cosine schedule: the learning rate glides from its starting value down to 0
+                lr = float(learning_rate * 0.5 * (1 + np.cos(np.pi * step / total_steps)))
+                self.__optimize(grad, lr, momentum, weight_decay)
+                step += 1
+            test = self.testing(X_test, Y_test, verbose=False)
+            print(f'Epoch {epoch}/{epochs}: loss = {epoch_loss / n:.4f}, test accuracy = {test:.4f}')
 
         print('Training finished!')
 
-    def testing(self, X_test, Y_test):
+    def testing(self, X_test, Y_test, verbose=True):
         # Test the model on the test dataset
-        total_correct = 0
-        for n in range(len(X_test)):
-            y = Y_test[n]
-            x = X_test[n][:]
-            prediction = np.argmax(self.__forward(x, y)['f_X'])
-            if prediction == y:
-                total_correct += 1
-        accuracy = total_correct / float(len(X_test))
-        print(f'Accuracy Test: {accuracy}')
+        _, _, P = self.__forward(X_test)
+        accuracy = float(np.mean(P.argmax(axis=1) == Y_test))
+        if verbose:
+            print(f'Accuracy Test: {accuracy}')
         return accuracy
 
     def save_model(self, file_name):
@@ -170,26 +160,33 @@ class NN:
         self.output_size = model_data['output_size']
         print(f"Model loaded from {file_name}")
 
+
 ####################################################################################
 
-# Set the number of iterations
-num_iterations = 200000
-# Set the base learning rate
-learning_rate = 0.01
-# Number of inputs
-num_inputs = 28 * 28
-# Number of outputs
-num_outputs = 10
-# Size of hidden layer
-hidden_size = 300
+if __name__ == '__main__':
+    # Number of passes over the training set
+    epochs = 30
+    # Number of images per gradient step
+    batch_size = 64
+    # Starting learning rate (decays to 0 over training)
+    learning_rate = 0.05
+    # Number of inputs
+    num_inputs = 28 * 28
+    # Number of outputs
+    num_outputs = 10
+    # Size of hidden layer
+    hidden_size = 300
 
-# Data fitting, training, and accuracy evaluation
-model = NN(num_inputs, hidden_size, num_outputs)
-model.train(x_train, y_train, num_iterations=num_iterations, learning_rate=learning_rate)
-model.save_model('trained_model.pkl')  # Save the trained model
+    x_train, y_train, x_test, y_test = load_mnist()
 
-# Load the model (if needed)
-# model.load_model('trained_model.pkl')
+    # Data fitting, training, and accuracy evaluation
+    model = NN(num_inputs, hidden_size, num_outputs, seed=0)
+    model.train(x_train, y_train, x_test, y_test, epochs=epochs, batch_size=batch_size,
+                learning_rate=learning_rate)
+    model.save_model('trained_model.pkl')  # Save the trained model
 
-# Test the model
-accu = model.testing(x_test, y_test)
+    # Load the model (if needed)
+    # model.load_model('trained_model.pkl')
+
+    # Test the model
+    accu = model.testing(x_test, y_test)

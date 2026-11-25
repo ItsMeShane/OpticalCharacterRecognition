@@ -127,17 +127,14 @@
             |
             <a href="https://shanekoester.com" target="_blank">Website</a>
          </p>
-         <p>
-            <strong>Tip:</strong> For best results, draw the digits in the center of the
-            canvas
-         </p>
       </div>
 
       <script>
          const canvas = document.getElementById('drawingPanel');
          const prediction = document.getElementById('predictionPanel');
          const whatComputerSees = document.getElementById('whatComputerSees');
-         const ctx = canvas.getContext('2d');
+         // the preview reads the canvas pixels many times per second
+         const ctx = canvas.getContext('2d', { willReadFrequently: true });
          ctx.fillStyle = 'white';
          ctx.fillRect(0, 0, canvas.width, canvas.height);
          const clearButton = document.getElementById('clearButton');
@@ -171,6 +168,18 @@
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(x, y);
+            updatePreview();
+         }
+
+         // redraw "What the NN Sees", at most once per screen refresh
+         let previewQueued = false;
+         function updatePreview() {
+            if (previewQueued) return;
+            previewQueued = true;
+            requestAnimationFrame(() => {
+               previewQueued = false;
+               whatComputerSees.src = preprocessCanvas(canvas);
+            });
          }
          canvas.addEventListener('mousedown', startDrawing);
          canvas.addEventListener('mouseup', stopDrawing);
@@ -183,11 +192,12 @@
          clearButton.addEventListener('click', () => {
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
+            updatePreview();
             updatePrediction();
          });
 
          function updatePrediction() {
-            const scaledDataURL = resizeImage(canvas, 28, 28); // Resize to 28x28
+            const scaledDataURL = preprocessCanvas(canvas); // Crop, scale and center to 28x28
             fetch('/predict', {
                method: 'POST',
                headers: {
@@ -220,24 +230,103 @@
                      const percentage = (prob * 100).toFixed(0);
                      bar.querySelector('div').style.width = `${percentage}%`;
                   });
-
-                  whatComputerSees.src = scaledDataURL;
                })
                .catch((error) => console.error('Error:', error));
          }
 
-         function resizeImage(canvas, width, height) {
+         function preprocessCanvas(canvas) {
+            const { width, height } = canvas;
+            const pixels = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+            const digit = preprocessPixels(pixels, width, height) || new Float32Array(28 * 28);
+
             const smallCanvas = document.createElement('canvas');
-            smallCanvas.width = width;
-            smallCanvas.height = height;
+            smallCanvas.width = 28;
+            smallCanvas.height = 28;
             const smallCtx = smallCanvas.getContext('2d');
-            smallCtx.drawImage(canvas, 0, 0, width, height);
+            const image = smallCtx.createImageData(28, 28);
+            for (let i = 0; i < 28 * 28; i++) {
+               const gray = Math.round(255 * (1 - digit[i])); // black ink on white
+               image.data.set([gray, gray, gray, 255], i * 4);
+            }
+            smallCtx.putImageData(image, 0, 0);
             return smallCanvas.toDataURL('image/png');
+         }
+
+         function preprocessPixels(pixels, width, height) {
+            const ink = new Float32Array(width * height);
+            let top = height, bottom = -1, left = width, right = -1;
+            for (let y = 0; y < height; y++) {
+               for (let x = 0; x < width; x++) {
+                  const value = 1 - pixels[(y * width + x) * 4] / 255;
+                  ink[y * width + x] = value;
+                  if (value > 0.1) {
+                     top = Math.min(top, y);
+                     bottom = Math.max(bottom, y);
+                     left = Math.min(left, x);
+                     right = Math.max(right, x);
+                  }
+               }
+            }
+            if (bottom < 0) return null;
+
+            // shrink the box so its longest side is 20 px, keeping the aspect ratio and place it in the middle of a 28x28 image
+            const w = right - left + 1, h = bottom - top + 1;
+            const scale = 20 / Math.max(w, h);
+            const sw = Math.max(1, Math.round(w * scale)), sh = Math.max(1, Math.round(h * scale));
+            const colWeights = areaWeights(w, sw), rowWeights = areaWeights(h, sh);
+            const offsetX = Math.floor((28 - sw) / 2), offsetY = Math.floor((28 - sh) / 2);
+            const digit = new Float32Array(28 * 28);
+            for (let ty = 0; ty < sh; ty++) {
+               for (let tx = 0; tx < sw; tx++) {
+                  let sum = 0;
+                  for (const [sy, wy] of rowWeights[ty]) {
+                     for (const [sx, wx] of colWeights[tx]) {
+                        sum += ink[(top + sy) * width + left + sx] * wy * wx;
+                     }
+                  }
+                  digit[(offsetY + ty) * 28 + offsetX + tx] = sum;
+               }
+            }
+
+            // shift the image so its center of mass lands on pixel (14, 14)
+            let total = 0, cy = 0, cx = 0;
+            for (let i = 0; i < 28 * 28; i++) {
+               total += digit[i];
+               cy += Math.floor(i / 28) * digit[i];
+               cx += (i % 28) * digit[i];
+            }
+            const dy = Math.round(14 - cy / total), dx = Math.round(14 - cx / total);
+            const centered = new Float32Array(28 * 28);
+            for (let y = 0; y < 28; y++) {
+               for (let x = 0; x < 28; x++) {
+                  const sy = y - dy, sx = x - dx;
+                  if (sy >= 0 && sy < 28 && sx >= 0 && sx < 28) {
+                     centered[y * 28 + x] = digit[sy * 28 + sx];
+                  }
+               }
+            }
+            return centered;
+         }
+
+         function areaWeights(n, m) {
+            const ratio = n / m;
+            const weights = [];
+            for (let i = 0; i < m; i++) {
+               const start = i * ratio, end = (i + 1) * ratio;
+               const pairs = [];
+               for (let j = Math.floor(start); j < Math.min(n, Math.ceil(end)); j++) {
+                  const overlap = Math.min(j + 1, end) - Math.max(j, start);
+                  if (overlap > 0) pairs.push([j, overlap / ratio]);
+               }
+               weights.push(pairs);
+            }
+            return weights;
          }
          // update prediction every 400 milliseconds
          setInterval(() => {
             updatePrediction();
          }, 400);
+         updatePreview();
       </script>
    </body>
 </html>
